@@ -3,6 +3,7 @@ const {
 	Pool
 } = require('pg')
 const config = require('./config')
+const { register_test_records, write_services } = require('./functions')
 
 const port = 3000
 
@@ -87,10 +88,6 @@ app.get('/availability', async (req, res) => {
 
 
 			let last_time_to_record = new Date(end_time_of_work.getTime() - service.duration * 60000)
-			//? Если запись заканчивает в 05, 15, 25,... минут, то добавляем ещё пять минут, чтобы отдых точно был минимум 10 минут
-			if (last_time_to_record.getMinutes() % 5 == 0 && last_time_to_record.getMinutes() % 10 !== 0) {
-				last_time_to_record = new Date(last_time_to_record.getTime() + 5 * 60000)
-			}
 			console.log(`Последнее доступное время записи: ${getStringTime(last_time_to_record)}`)
 
 			//? Заполняем массивчик с временами, начиная с 9:00
@@ -118,10 +115,6 @@ app.get('/availability', async (req, res) => {
 			console.log('Можем записать в промежуток в начале дня')
 			const temp_first_record_time = new Date(records[0].datetime)
 			let last_time_to_record = new Date(temp_first_record_time.getTime() - service.duration * 60000 - 10 * 60000) //? Последнее время для записи (перед первой записью)
-			//? Если запись заканчивает в 05, 15, 25,... минут, то добавляем ещё пять минут, чтобы отдых точно был минимум 10 минут
-			if (last_time_to_record.getMinutes() % 5 == 0 && last_time_to_record.getMinutes() % 10 !== 0) {
-				last_time_to_record = new Date(last_time_to_record.getTime() + 5 * 60000)
-			}
 			console.log(`Доступное время для записи в начале дня: 9:00 - ${getStringTime(last_time_to_record)}`)
 
 			let temp_date = new Date(date)
@@ -151,10 +144,6 @@ app.get('/availability', async (req, res) => {
 				if (diff_time >= service.duration + prev_record.duration + 20) {
 					const start_time = new Date(prev_record.datetime.getTime() + prev_record.duration * 60000 + 10 * 60000)
 					let last_time = new Date(curr_record.datetime.getTime() - service.duration * 60000 - 10 * 60000)
-					//? Если запись заканчивает в 05, 15, 25,... минут, то добавляем ещё пять минут, чтобы отдых точно был минимум 10 минут
-					if (last_time.getMinutes() % 5 == 0 && last_time.getMinutes() % 10 !== 0) {
-						last_time = new Date(last_time.getTime() - 5 * 60000)
-					}
 					if (start_time.getTime() == last_time.getTime()) {
 						console.log(`Можем записать на ${getStringTime(start_time)}`)
 						result.times.push(getStringTime(start_time))
@@ -174,6 +163,7 @@ app.get('/availability', async (req, res) => {
 					console.log('Не можем записать на этот промежуток')
 				}
 			}
+			//TODO remove it
 			res.json(result)
 			return
 		}
@@ -228,6 +218,6 @@ app.post('/register_record', async (req, res) => {
 	}
 })
 
-app.listen(port, () => {
+app.listen(port, async () => {
 	console.log(`Сервер запущен на порту: ${port}`)
 })

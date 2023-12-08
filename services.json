@@ -7,7 +7,7 @@
 	{
 		"name": "Мужская стрижка",
 		"price": 500,
-		"duration": 15
+		"duration": 20
 	},
 	{
 		"name": "Окрашивание",
@@ -27,12 +27,12 @@
 	{
 		"name": "Укладка",
 		"price": 700,
-		"duration": 15
+		"duration": 20
 	},
 	{
 		"name": "Завивка",
 		"price": 700,
-		"duration": 15
+		"duration": 20
 	},
 	{
 		"name": "Создание вечерних причёсок",
@@ -77,6 +77,6 @@
 	{
 		"name": "Массаж головы",
 		"price": 1000,
-		"duration": 15
+		"duration": 20
 	}
 ]
