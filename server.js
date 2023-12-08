@@ -3,7 +3,6 @@ const {
 	Pool
 } = require('pg')
 const config = require('./config')
-const { register_test_records, write_services } = require('./functions')
 
 const port = 3000
 
@@ -51,9 +50,9 @@ app.get('/availability', async (req, res) => {
 	try {
 		const {
 			service_id,
-			iso_date
+			date_str
 		} = req.query
-		if (!service_id || !iso_date) {
+		if (!service_id || !date_str) {
 			//? Если пользователь при запросе не указал услугу или дату, отклоняем запрос
 			res.status(400).send('Id услуги или дата не указаны')
 			return
@@ -68,13 +67,16 @@ app.get('/availability', async (req, res) => {
 		}
 		const service = service_query_result.rows[0]
 
-		date = new Date(iso_date)
+		const date = new Date(date_str)
 		const string_date = getStringDate(date)
 		const start_time_of_work = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 9) //? Начало рабочего дня (9:00)
 		const end_time_of_work = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 18) //? Конец рабочего дня (18:00)
+
+		//? Результат, который отправим пользователю
 		let result = {
 			'date': string_date,
-			'times': []
+			'service_id': service.id,
+			'available_time': []
 		}
 
 		//? Получаем все записи в указанный день
@@ -82,24 +84,26 @@ app.get('/availability', async (req, res) => {
 		const records = record_query_result.rows
 
 		console.log(`\nПроверка доступности на ${string_date}, услуга: ${service.name} (${service.duration} мин), записей в этот день: ${records.length}`)
+
+
+		//? Если записей в этот день нет, говорим что весь день свободный, учитывая что мастер должен успеть до 18:00
 		if (records.length == 0) {
-			//? Если записей в этот день нет, говорим что весь день свободный, учитывая что мастер должен успеть до 18:00
 			console.log('Весь день свободный')
 
 
-			let last_time_to_record = new Date(end_time_of_work.getTime() - service.duration * 60000)
+			const last_time_to_record = new Date(end_time_of_work.getTime() - service.duration * 60000)
 			console.log(`Последнее доступное время записи: ${getStringTime(last_time_to_record)}`)
 
 			//? Заполняем массивчик с временами, начиная с 9:00
 			//? Кидаем в массив 9:00
 			let temp_date = new Date(date)
 			temp_date.setHours(9)
-			result.times.push(getStringTime(temp_date))
+			result.available_time.push(getStringTime(temp_date))
 
 			//? Прибавляем к temp_date 10 минут, до тех пор пока temp_date не будет равен last_time_to_record
 			while (temp_date.getTime() !== last_time_to_record.getTime()) {
 				temp_date = new Date(temp_date.getTime() + 10 * 60000)
-				result.times.push(getStringTime(temp_date))
+				result.available_time.push(getStringTime(temp_date))
 			}
 			res.json(result)
 			return
@@ -110,65 +114,99 @@ app.get('/availability', async (req, res) => {
 		const first_record_diff = (records[0].datetime.getTime() - start_time_of_work) / (1000 * 60)
 		console.log(`Промежуток в начале дня: ${first_record_diff} мин`)
 
-		//? Если промежуток больше, чем длительность услуги + 10 мин отдыха до и после, то можем записать в этот промежуток
-		if (first_record_diff >= service.duration + 20) {
+		//? Если промежуток больше, чем длительность услуги + 10 мин отдыхапосле, то можем записать в этот промежуток
+		if (first_record_diff >= service.duration + 10) {
 			console.log('Можем записать в промежуток в начале дня')
-			const temp_first_record_time = new Date(records[0].datetime)
-			let last_time_to_record = new Date(temp_first_record_time.getTime() - service.duration * 60000 - 10 * 60000) //? Последнее время для записи (перед первой записью)
-			console.log(`Доступное время для записи в начале дня: 9:00 - ${getStringTime(last_time_to_record)}`)
+			const last_time_to_record = new Date(records[0].datetime.getTime() - service.duration * 60000 - 10 * 60000) //? Последнее время для записи (перед первой записью)
 
-			let temp_date = new Date(date)
-			temp_date.setHours(9)
-			result.times.push(getStringTime(temp_date))
+			if (start_time_of_work.getTime() === last_time_to_record.getTime()) {
+				console.log(`Доступное время для записи в начале дня: 9:00`)
+				result.available_time.push(getStringTime(start_time_of_work))
+			} else {
+				console.log(`Доступное время для записи в начале дня: 9:00 - ${getStringTime(last_time_to_record)}`)
 
-			//? Прибавляем к temp_date 10 минут, до тех пор пока temp_date не будет равен last_time_to_record
-			while (temp_date.getTime() !== last_time_to_record.getTime()) {
-				temp_date = new Date(temp_date.getTime() + 10 * 60000)
-				result.times.push(getStringTime(temp_date))
+				let temp_date = new Date(date)
+				temp_date.setHours(9)
+				result.available_time.push(getStringTime(temp_date))
+
+				//? Прибавляем к temp_date 10 минут, до тех пор пока temp_date не будет равен last_time_to_record
+				while (temp_date.getTime() !== last_time_to_record.getTime()) {
+					temp_date = new Date(temp_date.getTime() + 10 * 60000)
+					result.available_time.push(getStringTime(temp_date))
+				}
 			}
-			console.log(result.times)
+
+			console.log(result.available_time)
 		} else {
 			console.log('В начале дня записать нельзя')
 		}
 
-		//? Если запись всего одна, то надо проверить только промежутки до и после
+		//? Если запись всего одна, то надо проверить только промежутки до и после, иначе проверяем промежутки между записями
 		if (records.length > 1) {
 			//? Проверяем промежутки между записями
 			for (let i = 1; i < records.length; i++) {
 				const prev_record = records[i - 1]
 				const curr_record = records[i]
 				console.log(`\nПроверка записей: ${getStringTime(prev_record.datetime)}(${prev_record.duration} мин) <-> ${getStringTime(curr_record.datetime)}(${curr_record.duration} мин)`)
-				const diff_time = (curr_record.datetime.getTime() - prev_record.datetime.getTime()) / (1000 * 60)
+				const diff_time = (curr_record.datetime.getTime() - prev_record.datetime.getTime() - prev_record.duration * 60000) / (1000 * 60)
 				console.log(`Промежуток: ${diff_time} мин`)
-				console.log(`Учитывая первую запись и отдых после неё: ${diff_time - prev_record.duration - 10} мин`)
-				if (diff_time >= service.duration + prev_record.duration + 20) {
+				if (diff_time >= service.duration + 20) {
 					const start_time = new Date(prev_record.datetime.getTime() + prev_record.duration * 60000 + 10 * 60000)
-					let last_time = new Date(curr_record.datetime.getTime() - service.duration * 60000 - 10 * 60000)
+					let last_time = new Date(curr_record.datetime.getTime() - 10 * 60000)
 					if (start_time.getTime() == last_time.getTime()) {
 						console.log(`Можем записать на ${getStringTime(start_time)}`)
-						result.times.push(getStringTime(start_time))
+						result.available_time.push(getStringTime(start_time))
 					} else {
 						console.log(`Можем записать в промежуток, c ${getStringTime(start_time)} до ${getStringTime(last_time)}`)
 
 						let temp_date = new Date(start_time)
-						result.times.push(getStringTime(temp_date))
+						result.available_time.push(getStringTime(temp_date))
 
 						//? Прибавляем к temp_date 10 минут, до тех пор пока temp_date не будет равен last_time
 						while (temp_date.getTime() !== last_time.getTime()) {
 							temp_date = new Date(temp_date.getTime() + 10 * 60000)
-							result.times.push(getStringTime(temp_date))
+							result.available_time.push(getStringTime(temp_date))
 						}
 					}
 				} else {
 					console.log('Не можем записать на этот промежуток')
 				}
 			}
-			//TODO remove it
-			res.json(result)
-			return
 		}
 
-		res.status(501).send('Not implemented')
+		//? Проверяем промежуток между последней записью и концом рабочего дня
+		const last_record = records.slice(-1)[0]
+		console.log(`\nПоследняя запись в ${getStringTime(last_record.datetime)} (${last_record.duration} мин)`)
+		const last_record_diff = (end_time_of_work - last_record.datetime.getTime() - last_record.duration * 60000) / (1000 * 60)
+		console.log(`Промежуток в конце дня: ${last_record_diff} мин`)
+
+		//? Если промежуток больше, чем длительность услуги + 10 мин отдыха до, то можем записать в этот промежуток
+		if (last_record_diff >= service.duration + 10) {
+			console.log('Можем записать в промежуток в конце дня')
+			const first_time_to_record = new Date(last_record.datetime.getTime() + last_record.duration * 60000 + 10 * 60000)
+			const last_time_to_record = new Date(end_time_of_work.getTime() - service.duration * 60000)
+
+			if (first_time_to_record.getTime() === last_time_to_record.getTime()) {
+				console.log(`Доступное время для записи в конце дня: ${getStringTime(first_time_to_record)}`)
+				result.available_time.push(getStringTime(first_time_to_record))
+			} else {
+				console.log(`Доступное время для записи в конце дня: ${getStringTime(first_time_to_record)} - ${getStringTime(last_time_to_record)}`)
+
+				let temp_date = new Date(first_time_to_record)
+				result.available_time.push(getStringTime(temp_date))
+
+				//? Прибавляем к temp_date 10 минут, до тех пор пока temp_date не будет равен last_time_to_record
+				while (temp_date.getTime() !== last_time_to_record.getTime()) {
+					temp_date = new Date(temp_date.getTime() + 10 * 60000)
+					result.available_time.push(getStringTime(temp_date))
+				}
+			}
+		} else {
+			console.log('В конце дня записать нельзя')
+		}
+
+
+		res.json(result)
 	} catch (err) {
 		console.log(err)
 		res.status(500).send('Ошибка')
@@ -181,10 +219,10 @@ app.post('/register_record', async (req, res) => {
 	try {
 		const {
 			service_id,
-			datetime
+			date_str
 		} = req.body
 
-		if (!service_id || !datetime) {
+		if (!service_id || !date_str) {
 			//? Если пользователь при запросе не указал услугу или время, отклоняем запрос
 			res.status(400).send('Id услуги или время не указаны')
 			return
@@ -197,21 +235,82 @@ app.post('/register_record', async (req, res) => {
 			res.status(400).send('Услуга с указанным id не найдена')
 			return
 		}
-		const service = service_query_result.rows[0]
 
-		//? Проверяем не стоит ли уже запись в это время (ищем запись с таким же временем)
-		const record_query_result = await pool.query('select count(*) from records where datetime=$1', [datetime])
-		if (record_query_result.rows[0].count > 0) {
-			//? Если запись с таким же временем уже есть, отклоняем запрос
-			res.status(400).send('В указанное время уже стоит запись')
+		const service = service_query_result.rows[0]
+		const date = new Date(date_str)
+		const start_time_of_work = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 9) //? Начало рабочего дня (9:00)
+		const end_time_of_work = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 18) //? Конец рабочего дня (18:00)
+
+		console.log(`\nЗапрос на запись ${getStringDate(date)} на ${getStringTime(date)}, услуга: ${service.name} (${service.duration} мин)`)
+
+		//? Проверяем, что время указно корректно (9:00 - 18:00)
+		if (date.getTime() < start_time_of_work.getTime() || date.getTime() > end_time_of_work.getTime()) {
+			console.log('Не корректно указано время')
+			res.status(400).send("Некорректно указано время, время работы салона: 9:00 - 18:00")
 			return
 		}
 
-		//? Добавляем запись в БД
-		const query_result = await pool.query('insert into records(service_id, datetime) values($1, $2) returning datetime', [service_id, datetime])
+		//? Проверяем, что время указно корректно 10, 20, 30 минут и тд... (а не 14, 23, 46)
+		if (date.getMinutes() % 10 !== 0) {
+			console.log('Не корректно указано время')
+			res.status(400).send("Некорректно указано время, записываться можно каждые 10 минут (12:10, 12:20, 12:30 и тд...)")
+			return
+		}
 
-		const dt = query_result.rows[0].datetime
-		res.send(`Вы успешно записаны на '${service.name}' ${dt.getDate()}.${dt.getMonth() + 1} в ${dt.getHours()}:${dt.getMinutes()}`)
+		//? Проверяем, что мастер успеет выполнить процедуру до 18:00
+		if (date.getTime() + service.duration * 60000 > end_time_of_work.getTime()) {
+			console.log('Мастер не успеет закончить процедуру до 18:00')
+			res.status(400).send("Мастер не успеет закончить процедуру до 18:00")
+			return
+		}
+
+		const new_record_end_time = new Date(date.getTime() + service.duration * 60000)
+		console.log(`Процедура будет идти с ${getStringTime(date)} до ${getStringTime(new_record_end_time)} (не включая отдых)`)
+
+
+		//? Получаем все записи в указанный день
+		const record_query_result = await pool.query(`select * from records join services on records.service_id = services.id where datetime::date = date '${getStringDate(date)}' order by datetime asc`)
+		const records = record_query_result.rows
+
+		if (records.length === 0) {
+			console.log('\nВесь день свободный, записываем')
+			await pool.query('insert into records(service_id, datetime) values($1, $2)', [service_id, date])
+			res.send(`Вы успешно записаны на '${service.name}' ${getStringDate(date)} в ${getStringTime(date)}`)
+			return
+		}
+
+
+		//? Если запись в этот день всего одна, то нужно просто посмотреть пересечения с ней
+		if (records.length == 1) {
+			const record = records[0]
+			const start_busy_time = new Date(record.datetime.getTime() - 10 * 60000)
+			const end_busy_time = new Date(record.datetime.getTime() + record.duration * 60000 + 10 * 60000)
+
+			console.log(`\nВ этот день всего одна запись на ${getStringTime(record.datetime)}, услуга: ${record.name} (${record.duration} мин)`)
+			console.log(`Мастер занят с ${getStringTime(start_busy_time)} до ${getStringTime(end_busy_time)} (включая отдых)`)
+
+			if (date.getTime() < end_busy_time) {
+				if (new_record_end_time.getTime() + 10 > start_busy_time) {
+					console.log('В это время мастер занят')
+					res.status(400).send('В это время мастер занят')
+					return
+				}
+			}
+
+			console.log('Записали')
+			await pool.query('insert into records(service_id, datetime) values($1, $2)', [service_id, date])
+			res.send(`Вы успешно записаны на '${service.name}' ${getStringDate(date)} в ${getStringTime(date)}`)
+			return
+		}
+
+		console.log(`\nЗаписей в этот день: ${records.length}`)
+
+		for (let i = 0; i < records.length; i++) {
+
+		}
+
+		res.status(501).send('Not implemented')
+
 	} catch (err) {
 		console.log(err)
 		res.status(500).send('Ошибка')
