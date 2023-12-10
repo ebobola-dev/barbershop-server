@@ -45,7 +45,6 @@ app.get('/services', async (req, res) => {
 })
 
 //* Получить возможное время на запись на услугу
-//! Не доделано
 app.get('/availability', async (req, res) => {
 	try {
 		const {
@@ -214,7 +213,6 @@ app.get('/availability', async (req, res) => {
 })
 
 //* Записаться на услугу
-//! Не доделано (нет полной проверки)
 app.post('/register_record', async (req, res) => {
 	try {
 		const {
@@ -264,6 +262,7 @@ app.post('/register_record', async (req, res) => {
 			return
 		}
 
+		//? Время конца процедуры (не учитывая отдых после неё)
 		const new_record_end_time = new Date(date.getTime() + service.duration * 60000)
 		console.log(`Процедура будет идти с ${getStringTime(date)} до ${getStringTime(new_record_end_time)} (не включая отдых)`)
 
@@ -272,6 +271,7 @@ app.post('/register_record', async (req, res) => {
 		const record_query_result = await pool.query(`select * from records join services on records.service_id = services.id where datetime::date = date '${getStringDate(date)}' order by datetime asc`)
 		const records = record_query_result.rows
 
+		//? Если записей в этот день нет, то ничего проверять не надо, просто записываем
 		if (records.length === 0) {
 			console.log('\nВесь день свободный, записываем')
 			await pool.query('insert into records(service_id, datetime) values($1, $2)', [service_id, date])
@@ -279,37 +279,71 @@ app.post('/register_record', async (req, res) => {
 			return
 		}
 
+		console.log(`\nЗаписей в этот день: ${records.length}`)
 
-		//? Если запись в этот день всего одна, то нужно просто посмотреть пересечения с ней
-		if (records.length == 1) {
-			const record = records[0]
-			const start_busy_time = new Date(record.datetime.getTime() - 10 * 60000)
-			const end_busy_time = new Date(record.datetime.getTime() + record.duration * 60000 + 10 * 60000)
+		//? Массив записей, которые помешают нам сделать новую запись
+		let interfering_records = []
 
-			console.log(`\nВ этот день всего одна запись на ${getStringTime(record.datetime)}, услуга: ${record.name} (${record.duration} мин)`)
-			console.log(`Мастер занят с ${getStringTime(start_busy_time)} до ${getStringTime(end_busy_time)} (включая отдых)`)
+		//? Время конца новой записи с учётом отдыха после неё
+		const new_record_end_time_with_pause = new Date(new_record_end_time.getTime() + 10 * 60000)
 
-			if (date.getTime() < end_busy_time) {
-				if (new_record_end_time.getTime() + 10 > start_busy_time) {
-					console.log('В это время мастер занят')
-					res.status(400).send('В это время мастер занят')
-					return
-				}
+
+		records.forEach(current_record => {
+			//? Время конца записи (без учёта отдыха после неё)
+			const curr_record_end_time = new Date(current_record.datetime.getTime() + current_record.duration * 60000)
+			//? Время конца записи с учётом отдыха после неё
+			const curr_record_end_time_with_pause = new Date(curr_record_end_time.getTime() + 10 * 60000)
+
+			let found_intersection = false //? Флаг на то, что нашли пересечение
+
+			//! Записи перескаются:
+
+			//! Если время начала новой записи находится в промежутке какой-то сущ. записи:
+			//! Условие:
+			//! Время начала новой записи >= время начала сущ. записи
+			//! При этом
+			//! Время начала новой записи  < время конца сущ. записи(+отдых после)
+			if (date.getTime() >= current_record.datetime.getTime() && date.getTime() < curr_record_end_time_with_pause.getTime()) {
+				console.log(`[!] Начало новой записи в промежутке существующей записи`)
+				found_intersection = true
 			}
 
-			console.log('Записали')
-			await pool.query('insert into records(service_id, datetime) values($1, $2)', [service_id, date])
-			res.send(`Вы успешно записаны на '${service.name}' ${getStringDate(date)} в ${getStringTime(date)}`)
+			//! Если время конца новой записи(+отдых) находится в промежутке какой-то сущ. записи:
+			//! Условие:
+			//! Время конца новой записи(+отдых) > время начала сущ. записи
+			//! При этом
+			//! Время конца новой записи(+отдых) <= время конца сущ. записи(+отдых после)
+			if (new_record_end_time_with_pause.getTime() > current_record.datetime.getTime() && new_record_end_time_with_pause.getTime() <= curr_record_end_time_with_pause.getTime()) {
+				console.log(`[!] Конец новой записи в промежутке существующей записи`)
+				found_intersection = true
+			}
+
+			//! Если новая запись целиком проглатываем сущ. запись (сущ. запись будет находится полностью внутри новой)
+			//! (если наоборот, новая полностью внутри сущ., то сработают оба предыдущих условия)
+			//! Условие:
+			//! Время начала сущ. записи >= время начала новой записи
+			//! При этом
+			//! Время конца сущ. записи(+отдых) <= время конца новой записи(+отдых после)
+			if (current_record.datetime.getTime() >= date.getTime() && curr_record_end_time_with_pause.getTime() <= new_record_end_time_with_pause.getTime()) {
+				console.log(`[!] Существующая запись находиться внутри новой`)
+				found_intersection = true
+			}
+
+			if (found_intersection) {
+				console.log(`[!] Пересечение с записью: ${getStringTime(current_record.datetime)}-${getStringTime(curr_record_end_time)}`)
+				interfering_records.push(current_record)
+				return
+			}
+		})
+
+		if (interfering_records.length > 0) {
+			res.status(400).send('Мастер занят в это время.')
 			return
 		}
 
-		console.log(`\nЗаписей в этот день: ${records.length}`)
-
-		for (let i = 0; i < records.length; i++) {
-
-		}
-
-		res.status(501).send('Not implemented')
+		console.log('Записали')
+		//await pool.query('insert into records(service_id, datetime) values($1, $2)', [service_id, date])
+		res.send(`Вы успешно записаны на '${service.name}' ${getStringDate(date)} в ${getStringTime(date)}`)
 
 	} catch (err) {
 		console.log(err)
