@@ -203,7 +203,8 @@ app.get('/availability', async (req, res) => {
 		} else {
 			console.log('В конце дня записать нельзя')
 		}
-
+		console.log(`\nВсё доступное время для записей на ${string_date} на услугу ${service.name} (${service.duration} мин):`)
+		console.log(result.available_time)
 
 		res.json(result)
 	} catch (err) {
@@ -273,7 +274,7 @@ app.post('/register_record', async (req, res) => {
 
 		//? Если записей в этот день нет, то ничего проверять не надо, просто записываем
 		if (records.length === 0) {
-			console.log('\nВесь день свободный, записываем')
+			console.log('\n[✓] Весь день свободный, записываем')
 			await pool.query('insert into records(service_id, datetime) values($1, $2)', [service_id, date])
 			res.send(`Вы успешно записаны на '${service.name}' ${getStringDate(date)} в ${getStringTime(date)}`)
 			return
@@ -341,8 +342,8 @@ app.post('/register_record', async (req, res) => {
 			return
 		}
 
-		console.log('Записали')
-		//await pool.query('insert into records(service_id, datetime) values($1, $2)', [service_id, date])
+		console.log('\n[✓] Пересечений с другими записями не найден, записываем...')
+		await pool.query('insert into records(service_id, datetime) values($1, $2)', [service_id, date])
 		res.send(`Вы успешно записаны на '${service.name}' ${getStringDate(date)} в ${getStringTime(date)}`)
 
 	} catch (err) {
