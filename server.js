@@ -44,6 +44,47 @@ app.get('/services', async (req, res) => {
 	}
 })
 
+//* Получить все записи на определённую дату
+app.get('/records', async (req, res) => {
+	try {
+		const {
+			date_str
+		} = req.query
+
+		if (!date_str) {
+			//? Если пользователь при запросе не указал дату, отклоняем запрос
+			res.status(400).send('Дата не указана')
+			return
+		}
+
+		const date = new Date(date_str)
+
+		let result = {
+			date: date,
+			records_count: 0,
+			records: []
+		}
+
+		//? Получаем все записи в указанный день
+		const record_query_result = await pool.query(`select * from records join services on records.service_id = services.id where datetime::date = date '${getStringDate(date)}' order by datetime asc`)
+		let records = record_query_result.rows
+		console.log(records)
+
+		//? Добавляем к каждой записи время её завершения (Клиент не должен заниматься такими вычислениями)
+		for (let i = 0; i < records.length; i++) {
+			records[i].datetime_end = new Date(records[i].datetime.getTime() + records[i].duration * 60000)
+		}
+
+		result.records = records
+		result.records_count = records.length
+
+		res.json(result)
+	} catch (err) {
+		console.log(err)
+		res.status(500).send('Ошибка')
+	}
+})
+
 //* Получить возможное время на запись на услугу
 app.get('/availability', async (req, res) => {
 	try {
