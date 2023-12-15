@@ -68,7 +68,6 @@ app.get('/records', async (req, res) => {
 		//? Получаем все записи в указанный день
 		const record_query_result = await pool.query(`select * from records join services on records.service_id = services.id where datetime::date = date '${getStringDate(date)}' order by datetime asc`)
 		let records = record_query_result.rows
-		console.log(records)
 
 		//? Добавляем к каждой записи время её завершения (Клиент не должен заниматься такими вычислениями)
 		for (let i = 0; i < records.length; i++) {
@@ -199,6 +198,7 @@ app.get('/availability', async (req, res) => {
 					} else {
 						console.log(`Можем записать в промежуток, c ${getStringTime(start_time)} до ${getStringTime(last_time)}`)
 
+						last_time = new Date(last_time.getTime() - service.duration * 60000)
 						let temp_date = new Date(start_time)
 						result.available_time.push(getStringTime(temp_date))
 
